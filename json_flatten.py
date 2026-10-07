@@ -176,6 +176,92 @@ def write_tabular(
         writer.writerow(formatted_row)
 
 
+def get_type_name(val: Any) -> str:
+    """Возвращает нормализованное имя типа данных для JSON."""
+    if val is None:
+        return "null"
+    if isinstance(val, bool):
+        return "bool"
+    if isinstance(val, int):
+        return "int"
+    if isinstance(val, float):
+        return "float"
+    if isinstance(val, str):
+        return "str"
+    if isinstance(val, list):
+        return "list"
+    if isinstance(val, dict):
+        return "dict"
+    return type(val).__name__
+
+
+def _extract_array_lengths(
+    data: Any,
+    sep: str = ".",
+    parent_path: str = "",
+    array_lengths: Optional[Dict[str, List[int]]] = None,
+) -> Dict[str, List[int]]:
+    if array_lengths is None:
+        array_lengths = {}
+
+    if isinstance(data, list):
+        path_key = parent_path if parent_path else "[]"
+        if path_key not in array_lengths:
+            array_lengths[path_key] = []
+        array_lengths[path_key].append(len(data))
+        for i, item in enumerate(data):
+            child_path = f"{parent_path}{sep}{i}" if parent_path else str(i)
+            _extract_array_lengths(item, sep=sep, parent_path=child_path, array_lengths=array_lengths)
+    elif isinstance(data, dict):
+        for k, v in data.items():
+            child_path = f"{parent_path}{sep}{k}" if parent_path else str(k)
+            _extract_array_lengths(v, sep=sep, parent_path=child_path, array_lengths=array_lengths)
+
+    return array_lengths
+
+
+def collect_stats(
+    data_items: Union[Any, Iterable[Any]],
+    sep: str = ".",
+) -> Dict[str, Any]:
+    """Собирает аналитическую статистику структуры данных (total_keys, max_depth, key_types, array_lengths)."""
+    if isinstance(data_items, (dict, str, int, float, bool)) or data_items is None:
+        items_list = [data_items]
+    elif isinstance(data_items, list):
+        items_list = data_items
+    else:
+        items_list = list(data_items)
+
+    all_keys = set()
+    max_depth = 0
+    key_types: Dict[str, set] = {}
+    array_lengths_raw: Dict[str, List[int]] = {}
+
+    for item in items_list:
+        _extract_array_lengths(item, sep=sep, array_lengths=array_lengths_raw)
+
+        flat = flatten(item, sep=sep)
+        for k, v in flat.items():
+            if not k:
+                continue
+            all_keys.add(k)
+            depth = len(k.split(sep))
+            if depth > max_depth:
+                max_depth = depth
+            if k not in key_types:
+                key_types[k] = set()
+            key_types[k].add(get_type_name(v))
+
+    return {
+        "total_keys": len(all_keys),
+        "max_depth": max_depth,
+        "key_types": {k: sorted(list(types)) for k, types in sorted(key_types.items())},
+        "array_lengths": {
+            k: sorted(list(set(lens))) for k, lens in sorted(array_lengths_raw.items())
+        },
+    }
+
+
 def main(argv: Union[List[str], None] = None) -> None:
     parser = argparse.ArgumentParser(description="Уплощение и восстановление вложенных JSON-структур.")
     parser.add_argument(
@@ -219,6 +305,13 @@ def main(argv: Union[List[str], None] = None) -> None:
         default="json",
         help="Формат вывода данных: json, csv или tsv (по умолчанию: json)",
     )
+    parser.add_argument(
+        "--stats",
+        "--schema",
+        action="store_true",
+        dest="stats",
+        help="Вывести JSON со статистикой структуры данных (total_keys, max_depth, key_types, array_lengths)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -233,7 +326,23 @@ def main(argv: Union[List[str], None] = None) -> None:
             should_close = True
 
         try:
-            if args.format in ("csv", "tsv"):
+            if args.stats:
+                items_list: List[Any] = []
+                for line in stream:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        obj = json.loads(stripped)
+                    except Exception as e:
+                        if args.ignore_errors:
+                            sys.stderr.write(f"Warning: skipping invalid JSON line: {e}\n")
+                            continue
+                        raise
+                    items_list.append(obj)
+                stats = collect_stats(items_list, sep=args.sep)
+                print(json.dumps(stats, indent=2, ensure_ascii=False))
+            elif args.format in ("csv", "tsv"):
                 records: List[Dict[str, Any]] = []
                 for line in stream:
                     stripped = line.strip()
@@ -270,6 +379,11 @@ def main(argv: Union[List[str], None] = None) -> None:
             raw_data = f.read()
 
     data = json.loads(raw_data)
+
+    if args.stats:
+        stats = collect_stats(data, sep=args.sep)
+        print(json.dumps(stats, indent=2, ensure_ascii=False))
+        return
 
     if args.format in ("csv", "tsv"):
         if isinstance(data, list):

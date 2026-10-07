@@ -11,6 +11,8 @@
 - **Устойчивость к ошибкам (`--ignore-errors`)**: пропуск некорректных строк в режиме NDJSON с предупреждением в `stderr`.
 - **Настраиваемый разделитель (`-s`, `--sep`)**: использование любого символа разделителя (например, `/`, `_`, `:`).
 - **Экспорт в табличные форматы (`--format csv/tsv`)**: преобразование массивов объектов JSON и потоков NDJSON в CSV или TSV с сохранением порядка колонок и корректным экранированием спецсимволов.
+- **Аналитика структуры и схемы (`--stats` / `--schema`)**: сбор статистики структуры данных: `total_keys`, `max_depth`, `key_types` (типы значений по каждому составному ключу) и `array_lengths` (длины встретившихся массивов).
+- **Аналитический режим (`--stats` / `--schema`)**: сбор детальной статистики структуры данных (`total_keys`, `max_depth`, типы данных `key_types`, длины массивов `array_lengths`).
 
 ---
 
@@ -31,6 +33,8 @@ python json_flatten.py [file] [опции]
 - `--max-depth N`: максимальная глубина уплощения (целое число).
 - `--ignore-errors`: пропуск некорректных строк JSON в режиме NDJSON с выводом предупреждения в `stderr`.
 - `--format {json,csv,tsv}`: формат вывода данных (по умолчанию: `json`).
+- `--stats`, `--schema`: вывод аналитической статистики структуры данных в формате JSON (`total_keys`, `max_depth`, `key_types`, `array_lengths`).
+- `--stats`, `--schema`: вывод аналитической статистики структуры данных в формате JSON (`total_keys`, `max_depth`, `key_types`, `array_lengths`).
 
 ---
 
@@ -151,12 +155,40 @@ srv1	12.5
 srv2	45.0
 ```
 
+### 10. Анализ структуры данных (`--stats` / `--schema`)
+```bash
+echo '{"user": {"name": "Alice", "tags": ["admin", "dev"]}}' | python json_flatten.py --stats
+```
+Вывод:
+```json
+{
+  "total_keys": 3,
+  "max_depth": 2,
+  "key_types": {
+    "user.name": [
+      "str"
+    ],
+    "user.tags.0": [
+      "str"
+    ],
+    "user.tags.1": [
+      "str"
+    ]
+  },
+  "array_lengths": {
+    "user.tags": [
+      2
+    ]
+  }
+}
+```
+
 ---
 
 ## Использование в коде Python
 
 ```python
-from json_flatten import flatten, unflatten, process_ndjson_line, to_tabular
+from json_flatten import flatten, unflatten, process_ndjson_line, to_tabular, collect_stats
 
 # Уплощение
 nested = {"profile": {"name": "Bob", "tags": ["dev", "lead"]}}
@@ -175,4 +207,8 @@ shallow = flatten(nested, max_depth=1)
 records = [flat, {"profile.name": "Alice", "profile.tags.0": "admin"}]
 csv_data = to_tabular(records, delimiter=",")
 tsv_data = to_tabular(records, delimiter="\t")
+
+# Анализ структуры и типов данных
+stats = collect_stats(nested)
+# {'total_keys': 3, 'max_depth': 2, 'key_types': {...}, 'array_lengths': {'profile.tags': [2]}}
 ```

@@ -5,11 +5,12 @@ import sys
 import tempfile
 import unittest
 from json_flatten import (
+    collect_stats,
     flatten,
-    unflatten,
     process_ndjson_line,
     process_ndjson_stream,
     to_tabular,
+    unflatten,
     write_tabular,
 )
 
@@ -347,6 +348,47 @@ class TestJsonFlattenCLI(unittest.TestCase):
         self.assertEqual(lines[0], "user.name,user.score")
         self.assertEqual(lines[1], "Alice,99")
 
+    def test_cli_stats_flag(self):
+        data = {
+            "user": {
+                "name": "Alice",
+                "age": 30,
+                "skills": ["python", "docker"],
+            }
+        }
+        res = self.run_cli(args=["--stats"], input_data=json.dumps(data))
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        stats = json.loads(res.stdout)
+        self.assertEqual(stats["total_keys"], 4)
+        self.assertEqual(stats["max_depth"], 3)
+        self.assertEqual(stats["key_types"]["user.name"], ["str"])
+        self.assertEqual(stats["key_types"]["user.age"], ["int"])
+        self.assertEqual(stats["key_types"]["user.skills.0"], ["str"])
+        self.assertEqual(stats["array_lengths"]["user.skills"], [2])
+
+    def test_cli_schema_alias(self):
+        data = {"metric": {"cpu": 15.5}}
+        res = self.run_cli(args=["--schema"], input_data=json.dumps(data))
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        stats = json.loads(res.stdout)
+        self.assertEqual(stats["total_keys"], 1)
+        self.assertEqual(stats["max_depth"], 2)
+        self.assertEqual(stats["key_types"]["metric.cpu"], ["float"])
+
+    def test_cli_stats_ndjson(self):
+        lines = [
+            json.dumps({"id": 1, "val": "abc"}),
+            json.dumps({"id": 2, "val": 123, "extra": True}),
+        ]
+        input_data = "\n".join(lines) + "\n"
+        res = self.run_cli(args=["-n", "--stats"], input_data=input_data)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        stats = json.loads(res.stdout)
+        self.assertEqual(stats["total_keys"], 3)
+        self.assertEqual(stats["key_types"]["id"], ["int"])
+        self.assertEqual(sorted(stats["key_types"]["val"]), ["int", "str"])
+        self.assertEqual(stats["key_types"]["extra"], ["bool"])
+
 
 class TestJsonFlattenTabularCore(unittest.TestCase):
     def test_to_tabular_csv_basic(self):
@@ -431,6 +473,47 @@ class TestJsonFlattenNDJSONCore(unittest.TestCase):
         ]
         results = list(process_ndjson_stream(lines, ignore_errors=True))
         self.assertEqual(results, ['{"x.y":10}', '{"z":30}'])
+
+
+class TestJsonFlattenStatsCore(unittest.TestCase):
+    def test_collect_stats_basic(self):
+        data = {
+            "user": {
+                "id": 1,
+                "name": "Bob",
+                "active": True,
+                "score": 4.5,
+                "tags": ["admin", "dev"],
+                "bio": None,
+            }
+        }
+        stats = collect_stats(data)
+        self.assertEqual(stats["total_keys"], 7)
+        self.assertEqual(stats["max_depth"], 3)
+        self.assertEqual(stats["key_types"]["user.id"], ["int"])
+        self.assertEqual(stats["key_types"]["user.name"], ["str"])
+        self.assertEqual(stats["key_types"]["user.active"], ["bool"])
+        self.assertEqual(stats["key_types"]["user.score"], ["float"])
+        self.assertEqual(stats["key_types"]["user.tags.0"], ["str"])
+        self.assertEqual(stats["key_types"]["user.tags.1"], ["str"])
+        self.assertEqual(stats["key_types"]["user.bio"], ["null"])
+        self.assertEqual(stats["array_lengths"]["user.tags"], [2])
+
+    def test_collect_stats_heterogeneous_records(self):
+        records = [
+            {"item": {"val": 10, "nums": [1]}},
+            {"item": {"val": "ten", "nums": [1, 2, 3]}},
+        ]
+        stats = collect_stats(records)
+        self.assertEqual(sorted(stats["key_types"]["item.val"]), ["int", "str"])
+        self.assertEqual(stats["array_lengths"]["item.nums"], [1, 3])
+
+    def test_collect_stats_empty(self):
+        stats = collect_stats({})
+        self.assertEqual(stats["total_keys"], 0)
+        self.assertEqual(stats["max_depth"], 0)
+        self.assertEqual(stats["key_types"], {})
+        self.assertEqual(stats["array_lengths"], {})
 
 
 if __name__ == "__main__":
