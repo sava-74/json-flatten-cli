@@ -4,7 +4,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from json_flatten import flatten, unflatten, process_ndjson_line, process_ndjson_stream
+from json_flatten import (
+    flatten,
+    unflatten,
+    process_ndjson_line,
+    process_ndjson_stream,
+    to_tabular,
+    write_tabular,
+)
 
 
 class TestJsonFlatten(unittest.TestCase):
@@ -278,6 +285,104 @@ class TestJsonFlattenCLI(unittest.TestCase):
         self.assertEqual(len(out_lines), 2)
         self.assertEqual(json.loads(out_lines[0]), {"a.b": 1})
         self.assertEqual(json.loads(out_lines[1]), {"c.d": 2})
+
+    def test_cli_format_csv_json_array(self):
+        data = [
+            {"id": 1, "user": {"name": "Alice", "city": "Moscow"}},
+            {"id": 2, "user": {"name": "Bob, Jr.", "city": "London"}},
+        ]
+        input_data = json.dumps(data)
+        res = self.run_cli(args=["--format", "csv"], input_data=input_data)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        lines = res.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "id,user.name,user.city")
+        self.assertEqual(lines[1], "1,Alice,Moscow")
+        self.assertEqual(lines[2], '2,"Bob, Jr.",London')
+
+    def test_cli_format_tsv_json_array(self):
+        data = [
+            {"id": 1, "profile": {"role": "admin"}},
+            {"id": 2, "profile": {"role": "editor"}},
+        ]
+        input_data = json.dumps(data)
+        res = self.run_cli(args=["--format", "tsv"], input_data=input_data)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        lines = res.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "id\tprofile.role")
+        self.assertEqual(lines[1], "1\tadmin")
+        self.assertEqual(lines[2], "2\teditor")
+
+    def test_cli_format_csv_ndjson(self):
+        lines = [
+            json.dumps({"id": 1, "meta": {"tag": "v1"}}),
+            json.dumps({"id": 2, "meta": {"tag": "v2"}}),
+        ]
+        input_data = "\n".join(lines) + "\n"
+        res = self.run_cli(args=["-n", "--format", "csv"], input_data=input_data)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        out_lines = res.stdout.strip().splitlines()
+        self.assertEqual(out_lines[0], "id,meta.tag")
+        self.assertEqual(out_lines[1], "1,v1")
+        self.assertEqual(out_lines[2], "2,v2")
+
+    def test_cli_format_tsv_ndjson(self):
+        lines = [
+            json.dumps({"a": 1, "b": {"c": 2}}),
+            json.dumps({"a": 3, "b": {"c": 4}}),
+        ]
+        input_data = "\n".join(lines) + "\n"
+        res = self.run_cli(args=["-n", "--format", "tsv"], input_data=input_data)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        out_lines = res.stdout.strip().splitlines()
+        self.assertEqual(out_lines[0], "a\tb.c")
+        self.assertEqual(out_lines[1], "1\t2")
+        self.assertEqual(out_lines[2], "3\t4")
+
+    def test_cli_format_csv_single_object(self):
+        data = {"user": {"name": "Alice", "score": 99}}
+        input_data = json.dumps(data)
+        res = self.run_cli(args=["--format", "csv"], input_data=input_data)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        lines = res.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "user.name,user.score")
+        self.assertEqual(lines[1], "Alice,99")
+
+
+class TestJsonFlattenTabularCore(unittest.TestCase):
+    def test_to_tabular_csv_basic(self):
+        records = [{"a.b": 1, "a.c": "text"}, {"a.b": 2, "a.c": "more"}]
+        csv_str = to_tabular(records, delimiter=",")
+        self.assertEqual(csv_str, "a.b,a.c\n1,text\n2,more\n")
+
+    def test_to_tabular_tsv_basic(self):
+        records = [{"k1": "val1", "k2": "val2"}]
+        tsv_str = to_tabular(records, delimiter="\t")
+        self.assertEqual(tsv_str, "k1\tk2\nval1\tval2\n")
+
+    def test_to_tabular_escaping(self):
+        records = [
+            {"col": 'val with, comma and "quotes" and \nnewline'},
+            {"col": "normal"},
+        ]
+        csv_str = to_tabular(records, delimiter=",")
+        # csv writer should quote the first field properly
+        self.assertIn('"val with, comma and ""quotes"" and \nnewline"', csv_str)
+
+    def test_to_tabular_heterogeneous_keys(self):
+        records = [
+            {"a": 1},
+            {"b": 2},
+            {"a": 3, "b": 4, "c": 5},
+        ]
+        csv_str = to_tabular(records, delimiter=",")
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(lines[0], "a,b,c")
+        self.assertEqual(lines[1], "1,,")
+        self.assertEqual(lines[2], ",2,")
+        self.assertEqual(lines[3], "3,4,5")
+
+    def test_to_tabular_empty(self):
+        self.assertEqual(to_tabular([]), "")
 
 
 class TestJsonFlattenNDJSONCore(unittest.TestCase):

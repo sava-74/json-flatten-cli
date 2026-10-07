@@ -10,6 +10,7 @@
 - **Ограничение глубины (`--max-depth`)**: возможность остановить разворачивание на заданном уровне.
 - **Устойчивость к ошибкам (`--ignore-errors`)**: пропуск некорректных строк в режиме NDJSON с предупреждением в `stderr`.
 - **Настраиваемый разделитель (`-s`, `--sep`)**: использование любого символа разделителя (например, `/`, `_`, `:`).
+- **Экспорт в табличные форматы (`--format csv/tsv`)**: преобразование массивов объектов JSON и потоков NDJSON в CSV или TSV с сохранением порядка колонок и корректным экранированием спецсимволов.
 
 ---
 
@@ -29,6 +30,7 @@ python json_flatten.py [file] [опции]
 - `-n`, `--ndjson`: построчный режим обработки NDJSON / JSON Lines (вывод в компактном виде).
 - `--max-depth N`: максимальная глубина уплощения (целое число).
 - `--ignore-errors`: пропуск некорректных строк JSON в режиме NDJSON с выводом предупреждения в `stderr`.
+- `--format {json,csv,tsv}`: формат вывода данных (по умолчанию: `json`).
 
 ---
 
@@ -127,12 +129,34 @@ echo -e '{"a": 1}\nNOT_A_JSON\n{"b": 2}' | python json_flatten.py -n --ignore-er
 Warning: skipping invalid JSON line: ...
 ```
 
+### 8. Экспорт массива объектов в CSV (`--format csv`)
+```bash
+echo '[{"id": 1, "user": {"name": "Alice"}}, {"id": 2, "user": {"name": "Bob, Jr."}}]' | python json_flatten.py --format csv
+```
+Вывод:
+```csv
+id,user.name
+1,Alice
+2,"Bob, Jr."
+```
+
+### 9. Экспорт потока NDJSON в TSV (`--format tsv`)
+```bash
+echo -e '{"host": "srv1", "metrics": {"cpu": 12.5}}\n{"host": "srv2", "metrics": {"cpu": 45.0}}' | python json_flatten.py -n --format tsv
+```
+Вывод:
+```tsv
+host	metrics.cpu
+srv1	12.5
+srv2	45.0
+```
+
 ---
 
 ## Использование в коде Python
 
 ```python
-from json_flatten import flatten, unflatten, process_ndjson_line
+from json_flatten import flatten, unflatten, process_ndjson_line, to_tabular
 
 # Уплощение
 nested = {"profile": {"name": "Bob", "tags": ["dev", "lead"]}}
@@ -146,4 +170,9 @@ restored = unflatten(flat, sep=".")
 # Ограничение глубины
 shallow = flatten(nested, max_depth=1)
 # {'profile': {'name': 'Bob', 'tags': ['dev', 'lead']}}
+
+# Экспорт в CSV / TSV
+records = [flat, {"profile.name": "Alice", "profile.tags.0": "admin"}]
+csv_data = to_tabular(records, delimiter=",")
+tsv_data = to_tabular(records, delimiter="\t")
 ```

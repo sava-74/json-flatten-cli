@@ -1,7 +1,9 @@
 import argparse
+import csv
+import io
 import json
 import sys
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
 
 
 def flatten(
@@ -131,6 +133,49 @@ def process_ndjson_stream(
             yield processed
 
 
+def to_tabular(
+    records: List[Dict[str, Any]],
+    delimiter: str = ",",
+) -> str:
+    """Конвертирует список плоских словарей в строку CSV или TSV."""
+    output = io.StringIO()
+    write_tabular(records, output, delimiter=delimiter)
+    return output.getvalue()
+
+
+def write_tabular(
+    records: List[Dict[str, Any]],
+    output: TextIO,
+    delimiter: str = ",",
+) -> None:
+    """Записывает список плоских словарей в поток вывода в формате CSV или TSV."""
+    if not records:
+        return
+
+    all_keys: List[str] = []
+    seen = set()
+    for row in records:
+        for k in row.keys():
+            if k not in seen:
+                seen.add(k)
+                all_keys.append(k)
+
+    writer = csv.writer(output, delimiter=delimiter, lineterminator="\n")
+    writer.writerow(all_keys)
+
+    for row in records:
+        formatted_row = []
+        for k in all_keys:
+            val = row.get(k)
+            if val is None:
+                formatted_row.append("")
+            elif isinstance(val, (dict, list)):
+                formatted_row.append(json.dumps(val, ensure_ascii=False))
+            else:
+                formatted_row.append(str(val))
+        writer.writerow(formatted_row)
+
+
 def main(argv: Union[List[str], None] = None) -> None:
     parser = argparse.ArgumentParser(description="Уплощение и восстановление вложенных JSON-структур.")
     parser.add_argument(
@@ -168,29 +213,54 @@ def main(argv: Union[List[str], None] = None) -> None:
         action="store_true",
         help="Пропускать некорректные JSON-строки в режиме NDJSON с выводом предупреждения в stderr",
     )
+    parser.add_argument(
+        "--format",
+        choices=["json", "csv", "tsv"],
+        default="json",
+        help="Формат вывода данных: json, csv или tsv (по умолчанию: json)",
+    )
 
     args = parser.parse_args(argv)
 
+    delimiter = "," if args.format == "csv" else "\t"
+
     if args.ndjson:
         if args.file == "-" or not args.file:
-            for out_line in process_ndjson_stream(
-                sys.stdin,
-                unflatten_mode=args.unflatten,
-                sep=args.sep,
-                max_depth=args.max_depth,
-                ignore_errors=args.ignore_errors,
-            ):
-                print(out_line)
+            stream = sys.stdin
+            should_close = False
         else:
-            with open(args.file, "r", encoding="utf-8") as f:
+            stream = open(args.file, "r", encoding="utf-8")
+            should_close = True
+
+        try:
+            if args.format in ("csv", "tsv"):
+                records: List[Dict[str, Any]] = []
+                for line in stream:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        obj = json.loads(stripped)
+                    except Exception as e:
+                        if args.ignore_errors:
+                            sys.stderr.write(f"Warning: skipping invalid JSON line: {e}\n")
+                            continue
+                        raise
+                    flat = flatten(obj, sep=args.sep, max_depth=args.max_depth)
+                    records.append(flat)
+                write_tabular(records, sys.stdout, delimiter=delimiter)
+            else:
                 for out_line in process_ndjson_stream(
-                    f,
+                    stream,
                     unflatten_mode=args.unflatten,
                     sep=args.sep,
                     max_depth=args.max_depth,
                     ignore_errors=args.ignore_errors,
                 ):
                     print(out_line)
+        finally:
+            if should_close:
+                stream.close()
         return
 
     if args.file == "-" or not args.file:
@@ -200,6 +270,21 @@ def main(argv: Union[List[str], None] = None) -> None:
             raw_data = f.read()
 
     data = json.loads(raw_data)
+
+    if args.format in ("csv", "tsv"):
+        if isinstance(data, list):
+            records = [
+                flatten(item, sep=args.sep, max_depth=args.max_depth)
+                if isinstance(item, (dict, list))
+                else {"": item}
+                for item in data
+            ]
+        elif isinstance(data, dict):
+            records = [flatten(data, sep=args.sep, max_depth=args.max_depth)]
+        else:
+            records = [{"": data}]
+        write_tabular(records, sys.stdout, delimiter=delimiter)
+        return
 
     if args.unflatten:
         result = unflatten(data, sep=args.sep)
