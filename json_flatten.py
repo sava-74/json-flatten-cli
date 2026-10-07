@@ -57,7 +57,7 @@ def unflatten(
     sep: str = ".",
 ) -> Union[Dict[str, Any], List[Any], Any]:
     """Восстанавливает исходную структуру из плоского словаря."""
-    if not data:
+    if not isinstance(data, dict) or not data:
         return {}
 
     result: Dict[str, Any] = {}
@@ -66,7 +66,7 @@ def unflatten(
         keys = composite_key.split(sep)
         curr = result
         for i, k in enumerate(keys[:-1]):
-            if k not in curr:
+            if k not in curr or not isinstance(curr[k], dict):
                 curr[k] = {}
             curr = curr[k]
         curr[keys[-1]] = value

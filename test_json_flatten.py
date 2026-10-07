@@ -74,6 +74,57 @@ class TestJsonFlatten(unittest.TestCase):
             {"items.0.id": 1, "items.0.name": "test"},
         )
 
+    def test_none_values(self):
+        data = {"a": None, "b": {"c": None}, "list": [None, 1]}
+        flat = flatten(data)
+        self.assertEqual(flat, {"a": None, "b.c": None, "list.0": None, "list.1": 1})
+        restored = unflatten(flat)
+        self.assertEqual(restored, data)
+
+    def test_empty_string_keys(self):
+        data = {"": "root_empty", "nested": {"": "nested_empty"}}
+        flat = flatten(data)
+        self.assertEqual(flat, {"": "root_empty", "nested.": "nested_empty"})
+        restored = unflatten(flat)
+        self.assertEqual(restored, data)
+
+    def test_special_characters_and_unicode_in_keys(self):
+        data = {
+            "ключ_кириллица": {"вложенный ключ": 100},
+            "special!@#$%^&*()_+": "symbols",
+            "emoji_🚀": {"sub_✨": True},
+            "whitespace inside": [1, 2],
+        }
+        flat = flatten(data)
+        restored = unflatten(flat)
+        self.assertEqual(restored, data)
+
+    def test_keys_with_dots_using_custom_sep(self):
+        # Если ключи содержат точки, использование альтернативного разделителя (например, '/') позволяет избежать коллизий
+        data = {"version.1": {"file.name.txt": "content"}}
+        flat = flatten(data, sep="/")
+        self.assertEqual(flat, {"version.1/file.name.txt": "content"})
+        restored = unflatten(flat, sep="/")
+        self.assertEqual(restored, data)
+
+    def test_conflicting_keys_in_unflatten_no_crash(self):
+        # Случай, когда один ключ является префиксом другого как примитив и объект
+        flat = {"a": 1, "a.b": 2}
+        restored = unflatten(flat)
+        self.assertIsInstance(restored, dict)
+        self.assertIn("a", restored)
+
+    def test_unflatten_non_dict_input(self):
+        self.assertEqual(unflatten(None), {})
+        self.assertEqual(unflatten([]), {})
+        self.assertEqual(unflatten("invalid"), {})
+
+    def test_numeric_dict_keys_non_sequential(self):
+        # Непоследовательные индексы должны оставаться словарем, а не превращаться в список
+        flat = {"items.0": "first", "items.2": "third"}
+        restored = unflatten(flat)
+        self.assertEqual(restored, {"items": {"0": "first", "2": "third"}})
+
 
 class TestJsonFlattenCLI(unittest.TestCase):
     def setUp(self):
